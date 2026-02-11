@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Binomial + Normal Overlay</title>
+    
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f6f8; color: #333; display: flex; flex-direction: column; align-items: center; padding: 20px; margin: 0; }
+        
+        h1 { margin-bottom: 5px; color: #2c3e50; }
+        
+        .container { max-width: 1100px; width: 100%; display: grid; grid-template-columns: 300px 1fr; gap: 20px; }
+        
+        /* Sidebar */
+        .sidebar { display: flex; flex-direction: column; gap: 20px; }
+        .panel { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+
+        /* Sliders */
+        .control-group { margin-bottom: 15px; }
+        label { display: flex; justify-content: space-between; font-weight: 600; font-size: 0.9em; color: #555; margin-bottom: 5px; }
+        input[type=range] { width: 100%; cursor: pointer; }
+        .val-display { color: #3498db; font-weight: bold; }
+
+        /* Calculator */
+        .calc-title { font-weight: bold; font-size: 1.1em; color: #2c3e50; margin-bottom: 10px; border-bottom: 2px solid #3498db; padding-bottom: 5px; }
+        .calc-input-group { margin-bottom: 10px; }
+        .calc-input-group select, .calc-input-group input { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        button.calc-btn { width: 100%; padding: 10px; background: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background 0.2s; }
+        button.calc-btn:hover { background: #2980b9; }
+
+        .calc-result { margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 4px; border-left: 4px solid #ccc; font-size: 0.9em; display: none; }
+        .res-valid { border-left-color: #27ae60; background: #eafaf1; }
+        .res-warn { border-left-color: #e74c3c; background: #fdedec; }
+
+        /* Visualization */
+        .viz-panel { background: #fff; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); padding: 10px; min-height: 500px; position: relative; }
+        
+        .bar { fill: #3498db; opacity: 0.7; transition: fill 0.2s; }
+        .bar:hover { fill: #2980b9; opacity: 1; }
+        .bar.highlight { fill: #e67e22 !important; opacity: 1; }
+
+        .normal-curve { fill: none; stroke: #c0392b; stroke-width: 3px; stroke-dasharray: 0; opacity: 0.8; pointer-events: none; }
+        
+        .axis text { font-size: 11px; fill: #7f8c8d; }
+        .domain, .tick line { stroke: #bdc3c7; }
+        
+        .tooltip { position: absolute; background: rgba(44, 62, 80, 0.9); color: #fff; padding: 8px 12px; border-radius: 4px; font-size: 12px; pointer-events: none; opacity: 0; transition: opacity 0.2s; z-index: 10; }
+
+        .toggle-container { margin-top: 10px; display: flex; align-items: center; gap: 8px; font-size: 0.9em; font-weight: bold; color: #c0392b; }
+    </style>
+</head>
+<body>
+
+    <h1>Binomial with Normal Approximation</h1>
+    
+    <div class="container">
+        
+        <div class="sidebar">
+            <div class="panel">
+                <div class="control-group">
+                    <label>Trials (n) <span id="val_n" class="val-display">30</span></label>
+                    <input type="range" id="nSlider" min="5" max="100" step="1" value="30">
+                </div>
+                <div class="control-group">
+                    <label>Prob (p) <span id="val_p" class="val-display">0.50</span></label>
+                    <input type="range" id="pSlider" min="0.01" max="0.99" step="0.01" value="0.5">
+                </div>
+                
+                <div class="toggle-container">
+                    <input type="checkbox" id="showNormal" checked>
+                    <label for="showNormal" style="margin:0; color:#c0392b; cursor:pointer;">Overlay Normal Curve</label>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="calc-title">Find Probability</div>
+                
+                <div class="calc-input-group">
+                    <select id="prob_type" onchange="toggleK2()">
+                        <option value="exact">P(X = k)</option>
+                        <option value="less">P(X &le; k)</option>
+                        <option value="greater">P(X &ge; k)</option>
+                        <option value="between">P(k1 &le; X &le; k2)</option>
+                    </select>
+                </div>
+
+                <div class="calc-input-group">
+                    <input type="number" id="inp_k1" placeholder="Enter k (e.g. 15)">
+                </div>
+                <div class="calc-input-group" id="grp_k2" style="display:none;">
+                    <input type="number" id="inp_k2" placeholder="Enter k2">
+                </div>
+
+                <button class="calc-btn" onclick="calculateAndHighlight()">Calculate</button>
+
+                <div id="calc_output" class="calc-result"></div>
+            </div>
+        </div>
+
+        <div class="viz-panel" id="viz">
+            <div class="tooltip" id="tooltip"></div>
+        </div>
+    </div>
+
+<script>
+    // --- Config ---
+    const margin = {top: 40, right: 30, bottom: 50, left: 60};
+    const width = 750 - margin.left - margin.right;
+    const height = 450 - margin.top - margin.bottom;
+
+    // --- State ---
+    let currentN = 30;
+    let currentP = 0.5;
+    let highlightRange = null;
+
+    // --- Math Helpers ---
+    function gammaln(x) {
+        var p = [0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+            771.32342877765313, -176.61502916214059, 12.507343278686905,
+            -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+        var g = 7;
+        if (x < 0.5) return Math.log(Math.PI) - Math.log(Math.sin(Math.PI * x)) - gammaln(1 - x);
+        x -= 1;
+        var a = p[0];
+        var t = x + g + 0.5;
+        for (var i = 1; i < p.length; i++) a += p[i] / (x + i);
+        return 0.5 * Math.log(2 * Math.PI) + (x + 0.5) * Math.log(t) - t + Math.log(a);
+    }
+    function logFactorial(n) { if (n === 0) return 0; return gammaln(n + 1); }
+    function nCr(n, r) { if (r < 0 || r > n) return 0; return Math.exp(logFactorial(n) - logFactorial(r) - logFactorial(n - r)); }
+    function binomPMF(n, k, p) { return nCr(n, k) * Math.pow(p, k) * Math.pow(1 - p, n - k); }
+
+    // Normal PDF for drawing curve
+    function normalPDF(x, mean, sd) {
+        return (1 / (sd * Math.sqrt(2 * Math.PI))) * Math.exp(-0.5 * Math.pow((x - mean) / sd, 2));
+    }
+    
+    // Normal CDF for calc
+    function normalCDF(z) {
+        if (z < -6) return 0; if (z > 6) return 1;
+        let t = 1 / (1 + 0.2316419 * Math.abs(z));
+        let d = 0.3989423 * Math.exp(-z * z / 2);
+        let p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+        return z > 0 ? 1 - p : p;
+    }
+
+    // --- D3 Setup ---
+    const svg = d3.select("#viz").append("svg")
+        .attr("viewBox", `0 0 750 450`)
+        .append("g")
+        .attr("transform", `translate(${margin.left},${margin.top})`);
+
+    const x = d3.scaleLinear().range([0, width]); // Switched to Linear for smooth curve overlay
+    const y = d3.scaleLinear().range([height, 0]);
+
+    const xAxis = svg.append("g").attr("transform", `translate(0,${height})`);
+    const yAxis = svg.append("g");
+    
+    // Labels
+    svg.append("text").attr("transform", "rotate(-90)").attr("y", 0 - margin.left + 15).attr("x", 0 - (height / 2)).style("text-anchor", "middle").style("font-size", "12px").style("fill", "#777").text("Probability");
+    svg.append("text").attr("transform", `translate(${width/2}, ${height + margin.bottom - 10})`).style("text-anchor", "middle").style("font-size", "12px").style("fill", "#777").text("Number of Successes (k)");
+
+    // Curve Path
+    const curvePath = svg.append("path").attr("class", "normal-curve");
+
+    // --- Core Logic ---
+
+    function updateViz() {
+        const n = currentN;
+        const p = currentP;
+        const showCurve = document.getElementById('showNormal').checked;
+
+        // 1. Binomial Data
+        const data = [];
+        for (let k = 0; k <= n; k++) {
+            const prob = binomPMF(n, k, p);
+            if (prob > 0.0001 || (k >= n*p - 3.5*Math.sqrt(n*p*(1-p)) && k <= n*p + 3.5*Math.sqrt(n*p*(1-p)))) {
+                data.push({ k: k, prob: prob });
+            }
+        }
+
+        // 2. Stats for Normal Curve
+        const mean = n * p;
+        const sd = Math.sqrt(n * p * (1 - p));
+
+        // 3. Normal Curve Data
+        // Generate points for smooth line
+        const curveData = [];
+        // Extend range slightly beyond visible bars
+        const minK = data[0].k;
+        const maxK = data[data.length-1].k;
+        
+        for(let i = minK - 1; i <= maxK + 1; i += 0.1) {
+            curveData.push({ x: i, y: normalPDF(i, mean, sd) });
+        }
+
+        // 4. Domains
+        // Use min/max of binomial data for X domain
+        const xMin = minK - 1;
+        const xMax = maxK + 1;
+        
+        x.domain([xMin, xMax]);
+        y.domain([0, Math.max(d3.max(data, d => d.prob), d3.max(curveData, d => d.y)) * 1.1]);
+
+        // 5. Draw Axes
+        xAxis.transition().duration(500).call(d3.axisBottom(x));
+        yAxis.transition().duration(500).call(d3.axisLeft(y).ticks(5));
+
+        // 6. Draw Bars
+        const barWidth = width / (xMax - xMin); // Calc width for linear scale
+        
+        const bars = svg.selectAll(".bar").data(data, d => d.k);
+        bars.exit().remove();
+
+        const enter = bars.enter().append("rect")
+            .attr("class", "bar")
+            .attr("y", height)
+            .attr("height", 0);
+
+        bars.merge(enter).transition().duration(500)
+            .attr("x", d => x(d.k) - barWidth/2 + 1) // Center bar on tick
+            .attr("width", barWidth - 2) // Slight padding
+            .attr("y", d => y(d.prob))
+            .attr("height", d => height - y(d.prob))
+            .attr("class", d => {
+                let isHighlight = false;
+                if(highlightRange) {
+                    if(highlightRange.type === 'exact' && d.k === highlightRange.k1) isHighlight = true;
+                    if(highlightRange.type === 'less' && d.k <= highlightRange.k1) isHighlight = true;
+                    if(highlightRange.type === 'greater' && d.k >= highlightRange.k1) isHighlight = true;
+                    if(highlightRange.type === 'between' && d.k >= highlightRange.k1 && d.k <= highlightRange.k2) isHighlight = true;
+                }
+                return isHighlight ? "bar highlight" : "bar";
+            });
+
+        // 7. Draw Normal Curve
+        if(showCurve) {
+            const lineGen = d3.line()
+                .x(d => x(d.x))
+                .y(d => y(d.y));
+            
+            curvePath.datum(curveData)
+                .transition().duration(500)
+                .attr("d", lineGen)
+                .style("opacity", 0.8);
+        } else {
+            curvePath.transition().duration(500).style("opacity", 0);
+        }
+
+        // Tooltips
+        svg.selectAll(".bar")
+            .on("mouseover", function(event, d) {
+                d3.select("#tooltip").style("opacity", 1)
+                    .html(`<strong>k = ${d.k}</strong><br>Binom: ${(d.prob*100).toFixed(4)}%`)
+                    .style("left", (event.pageX + 10) + "px").style("top", (event.pageY - 20) + "px");
+            })
+            .on("mouseout", () => d3.select("#tooltip").style("opacity", 0));
+    }
+
+    // --- Calculator Logic ---
+    function toggleK2() {
+        const type = document.getElementById('prob_type').value;
+        document.getElementById('grp_k2').style.display = type === 'between' ? 'block' : 'none';
+    }
+
+    function calculateAndHighlight() {
+        const type = document.getElementById('prob_type').value;
+        const k1 = parseInt(document.getElementById('inp_k1').value);
+        let k2 = type === 'between' ? parseInt(document.getElementById('inp_k2').value) : null;
+        const n = currentN;
+        const p = currentP;
+
+        if(isNaN(k1)) { alert("Enter a valid k"); return; }
+        
+        // Exact
+        let exactProb = 0;
+        if(type === 'exact') exactProb = binomPMF(n, k1, p);
+        if(type === 'less') for(let i=0; i<=k1; i++) exactProb += binomPMF(n, i, p);
+        if(type === 'greater') for(let i=k1; i<=n; i++) exactProb += binomPMF(n, i, p);
+        if(type === 'between') for(let i=k1; i<=k2; i++) exactProb += binomPMF(n, i, p);
+
+        // Approx
+        const mean = n*p, sd = Math.sqrt(n*p*(1-p));
+        const isValid = n*p >= 10 && n*(1-p) >= 10;
+        let approxHtml = "";
+        
+        if(isValid) {
+            let z1, z2, approxProb=0;
+            if(type === 'exact') {
+                z1 = ((k1 - 0.5) - mean)/sd; z2 = ((k1 + 0.5) - mean)/sd;
+                approxProb = normalCDF(z2) - normalCDF(z1);
+            } else if(type === 'less') {
+                z1 = ((k1 + 0.5) - mean)/sd; approxProb = normalCDF(z1);
+            } else if(type === 'greater') {
+                z1 = ((k1 - 0.5) - mean)/sd; approxProb = 1 - normalCDF(z1);
+            } else if(type === 'between') {
+                z1 = ((k1 - 0.5) - mean)/sd; z2 = ((k2 + 0.5) - mean)/sd;
+                approxProb = normalCDF(z2) - normalCDF(z1);
+            }
+            approxHtml = `<div style="margin-top:8px; border-top:1px solid #ddd; padding-top:5px;"><strong>Normal Approx:</strong> ${approxProb.toFixed(5)}</div>`;
+        } else {
+            approxHtml = `<div style="margin-top:8px; border-top:1px solid #ddd; padding-top:5px; color:#e74c3c"><small>Normal Approx Invalid (np < 10)</small></div>`;
+        }
+
+        const resBox = document.getElementById('calc_output');
+        resBox.style.display = 'block';
+        resBox.className = isValid ? "calc-result res-valid" : "calc-result res-warn";
+        resBox.innerHTML = `<strong>Binomial:</strong> ${exactProb.toFixed(5)}${approxHtml}`;
+
+        highlightRange = { type, k1, k2 };
+        updateViz();
+    }
+
+    // Listeners
+    document.getElementById('nSlider').addEventListener('input', (e) => {
+        currentN = parseInt(e.target.value);
+        document.getElementById('val_n').innerText = currentN;
+        highlightRange = null; document.getElementById('calc_output').style.display = 'none';
+        updateViz();
+    });
+    document.getElementById('pSlider').addEventListener('input', (e) => {
+        currentP = parseFloat(e.target.value);
+        document.getElementById('val_p').innerText = currentP.toFixed(2);
+        highlightRange = null; document.getElementById('calc_output').style.display = 'none';
+        updateViz();
+    });
+    document.getElementById('showNormal').addEventListener('change', updateViz);
+
+    // Init
+    updateViz();
+
+</script>
+</body>
+</html>
